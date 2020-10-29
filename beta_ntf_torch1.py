@@ -5,7 +5,7 @@ modified by Zihao Cui 2018
 
 Copyright © 2018 SASPL
 Auteur(s) : ZIHAO CUI
-the origin one is also given
+the origin one is written by Liutkus Antoine
 
 --------------------------------------------
 the beta_ntf module is free software: you can redistribute it and/or modify
