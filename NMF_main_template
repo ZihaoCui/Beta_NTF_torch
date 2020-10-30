@@ -8,6 +8,7 @@ import deepdish as dd
 import time
 import os
 from math import ceil
+from .beta_ntf_torch1 import *
 import numpy as np
 
 import matplotlib.pyplot as plt
