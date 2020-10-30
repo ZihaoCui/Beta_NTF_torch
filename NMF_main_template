@@ -1,0 +1,107 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as op
+import h5py
+import hdf5storage
+import deepdish as dd
+import time
+import os
+from math import ceil
+import numpy as np
+
+import matplotlib.pyplot as plt
+
+import AR_package as my_ar
+import wechat_package as my_wechat
+
+
+def num_flat_features(x):
+    size = x.size()[1:]  # all dimensions except the batch dimension
+    num_features = 1
+    for s in size:
+        num_features *= s
+    return num_features
+
+############################## parameters #######################################
+model_folder = '../model/harmonic1'
+
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+#device = "cpu"
+n_frames = 11
+dropout_rate = 0.2
+
+small_number = 2
+
+################################# Load data ######################################
+# load the segment data from matlab pre_processing
+keys_ = ['Input_noise','Input_speech']
+# keys_ = ['tar_signal_mag','tar_signal_phase']
+dataset = 'SE_magtomag'
+
+# load from mat file
+f = h5py.File('H:/train/{}/TIMIT_NMF_InfdB.mat'.format(dataset),'r') # the matlab file
+for key_ in keys_:
+    tt = torch.from_numpy((np.array(f[key_],dtype=np.float32))).to(torch.float32)
+    tt = tt[:np.int(tt.size(0)/small_number)]
+    locals()[key_] =tt
+    del tt
+
+############################### NMF training ######################################
+# the data shape is [_,11,257]
+frames = 1
+index_ = [5,6]
+
+envmodel_name = 'NMF' + 'ori' + '_2'
+beta = 1;
+Input_speech = Input_speech[:,index_[0]:index_[1]].view(-1,num_flat_features(Input_speech[:,index_[0]:index_[1]]))+1e-8 # avoid 0
+Input_noise = Input_noise[:,index_[0]:index_[1]].view(-1,num_flat_features(Input_noise[:,index_[0]:index_[1]]))
+Speech = my_ar.BetaNTF(Input_speech.size(),150,verbose = True)
+Noise = my_ar.BetaNTF(Input_noise.size(),150,verbose = True)
+Speech.fit(Input_speech.to(device),train=True)
+Noise.fit(Input_noise.to(device),train=True)
+
+mixture = my_ar.BetaNTF(Input_noise.size(),Speech.n_components+Noise.n_components,fixed_factors = [1],verbose = False)
+mixture.factors_[1] = torch.cat((Speech.factors_[1],Noise.factors_[1]),1)
+
+################################## NMF test #######################################
+snr_list = ['0','5','10']
+noise_name = ['babble','factory1','f16','cafe_demand']
+keys_ = [ 'Input_lps']
+dataset_list = ['TIMIT', 'LibriSpeech']
+keys_ = [ 'Input_lps']
+for dataset in dataset_list:
+    for i in noise_name:
+        for j in snr_list:
+            print('TIMIT_phase_recovery_{}_{}dB.mat'.format(i,j))
+            bf_time = time.time()
+            
+            for p in range(1,41):
+                f = h5py.File('H:/test/{}/SE_magtomag/TIMIT_phase_recovery_index{}_{}_{}dB.mat'.format(dataset,p,i,j),'r') # generated from matlab code
+                        
+                for key_ in keys_:
+                    locals()[key_] = torch.from_numpy(np.array(f[key_],dtype=np.float32)).to(device)
+
+                Input_mix = torch.pow(10,Input_lps)
+                mixture.factors_[0] = mixture.nnrandn((Input_mix.size(0), mixture.n_components))
+                mixture.fit(Input_mix[:,index_[0]:index_[1]].view(-1,num_flat_features(Input_mix[:,index_[0]:index_[1]])))
+
+                Speech_part = my_ar.parafac([mixture.factors_[0][:,:Speech.n_components],mixture.factors_[1][:,:Speech.n_components]]).reshape(Input_mix.size(0),frames,-1)[:,0]
+                Noise_part = my_ar.parafac([mixture.factors_[0][:,Speech.n_components:],mixture.factors_[1][:,Speech.n_components:]]).reshape(Input_mix.size(0),frames,-1)[:,0]
+
+                ##### Wiener #####
+                EN = Noise_part**2
+                ES = Speech_part**2
+                save_file = '../result/mask/{}_{}'.format(envmodel_name,'Wiener')
+
+                Wiener_M = Speech_part**2/(Speech_part**2+Noise_part**2)
+                Wiener_STSA = Wiener_M*Input_mix[:,5]
+
+                matfiledata = {}
+                if not os.path.exists(save_file):
+                    os.makedirs(save_file)
+                matfiledata[u'enhanced'] = Wiener_STSA.cpu().detach().numpy()
+                hdf5storage.write(matfiledata, '.', '{}/{}_{}th_enhance_{}_{}dB.mat'.format(save_file,dataset,p,i,j),'r')
+
+            time_now = time.time()
+            print("Time complex: {:.3f}".format(time_now-bf_time))
