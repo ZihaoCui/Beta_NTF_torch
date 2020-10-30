@@ -13,7 +13,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 import AR_package as my_ar
-import wechat_package as my_wechat
 
 
 def num_flat_features(x):
